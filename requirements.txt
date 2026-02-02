@@ -1,2 +1,3 @@
-pip install aiogram==3.4.1
-pip freeze > requirements.txt
+aiogram==3.4.1
+aiohttp
+pydantic
