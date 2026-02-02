@@ -26,7 +26,7 @@ def run_flask():
 
 # ================== CONFIG ==================
 TOKEN = os.getenv("BOT_TOKEN")
-ADMIN_IDS = [5640388317]
+ADMIN_IDS = [6601319172, 8256749887]
 
 logging.basicConfig(level=logging.INFO)
 
