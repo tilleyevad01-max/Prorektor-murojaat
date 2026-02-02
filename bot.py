@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import os
+import sqlite3
 
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import CommandStart
@@ -17,10 +18,41 @@ ADMIN_IDS = [5640388317]
 logging.basicConfig(level=logging.INFO)
 
 bot = Bot(token=TOKEN)
-storage = MemoryStorage()
-dp = Dispatcher(storage=storage)
+dp = Dispatcher(storage=MemoryStorage())
 
-registered_users = {}
+
+# ================== DATABASE ==================
+conn = sqlite3.connect("users.db")
+cursor = conn.cursor()
+
+cursor.execute("""
+CREATE TABLE IF NOT EXISTS users (
+    user_id INTEGER PRIMARY KEY,
+    full_name TEXT,
+    faculty TEXT,
+    group_name TEXT,
+    phone TEXT
+)
+""")
+conn.commit()
+
+
+def is_registered(user_id: int) -> bool:
+    cursor.execute("SELECT 1 FROM users WHERE user_id=?", (user_id,))
+    return cursor.fetchone() is not None
+
+
+def save_user(user_id, full_name, faculty, group, phone):
+    cursor.execute("""
+    INSERT OR REPLACE INTO users
+    VALUES (?, ?, ?, ?, ?)
+    """, (user_id, full_name, faculty, group, phone))
+    conn.commit()
+
+
+def get_user(user_id):
+    cursor.execute("SELECT * FROM users WHERE user_id=?", (user_id,))
+    return cursor.fetchone()
 
 
 # ================== KEYBOARDS ==================
@@ -31,11 +63,6 @@ faculty_keyboard = ReplyKeyboardMarkup(
         [KeyboardButton(text="Menejment")],
         [KeyboardButton(text="Turizm")],
         [KeyboardButton(text="Bank ishi")],
-        [KeyboardButton(text="TDIU-PDU qo'shma ta'lim fakulteti")],
-        [KeyboardButton(text="Pendidikan xalqaro qoʻshma taʼlim fakulteti")],
-        [KeyboardButton(text="TDIU-URDIU qo'shma ta'lim dasturi fakulteti")],
-        [KeyboardButton(text="TDIU To'rtko'l fakulteti")],
-        [KeyboardButton(text="Soliq va budjet hisobi fakulteti")],
     ],
     resize_keyboard=True
 )
@@ -55,11 +82,10 @@ class RegistrationState(StatesGroup):
 
 # ================== START ==================
 @dp.message(CommandStart())
-async def welcome(message: types.Message, state: FSMContext):
-    user_id = message.from_user.id
-    if user_id not in registered_users:
+async def start(message: types.Message, state: FSMContext):
+    if not is_registered(message.from_user.id):
         await message.answer(
-            "Assalomu alaykum!\nIltimos, fakultetingizni tanlang 👇",
+            "Assalomu alaykum!\nFakultetingizni tanlang 👇",
             reply_markup=faculty_keyboard
         )
         await state.set_state(RegistrationState.faculty)
@@ -68,66 +94,65 @@ async def welcome(message: types.Message, state: FSMContext):
 
 
 @dp.message(RegistrationState.faculty)
-async def register_faculty(message: types.Message, state: FSMContext):
+async def reg_faculty(message: types.Message, state: FSMContext):
     await state.update_data(faculty=message.text)
     await message.answer("Guruhingizni yozing:", reply_markup=types.ReplyKeyboardRemove())
     await state.set_state(RegistrationState.group)
 
 
 @dp.message(RegistrationState.group)
-async def register_group(message: types.Message, state: FSMContext):
+async def reg_group(message: types.Message, state: FSMContext):
     await state.update_data(group=message.text)
-    contact_kb = ReplyKeyboardMarkup(
+    kb = ReplyKeyboardMarkup(
         keyboard=[[KeyboardButton(text="📞 Telefon raqamini yuborish", request_contact=True)]],
         resize_keyboard=True
     )
-    await message.answer("Telefon raqamingizni yuboring:", reply_markup=contact_kb)
+    await message.answer("Telefon raqamingizni yuboring:", reply_markup=kb)
     await state.set_state(RegistrationState.phone)
 
 
 @dp.message(RegistrationState.phone, F.contact)
-async def process_contact(message: types.Message, state: FSMContext):
-    user_id = message.from_user.id
+async def reg_phone(message: types.Message, state: FSMContext):
     data = await state.get_data()
-
-    registered_users[user_id] = {
-        "faculty": data["faculty"],
-        "group": data["group"],
-        "phone": message.contact.phone_number
-    }
-
+    save_user(
+        message.from_user.id,
+        message.from_user.full_name,
+        data["faculty"],
+        data["group"],
+        message.contact.phone_number
+    )
     await state.clear()
-    await message.answer("✅ Ro‘yxatdan muvaffaqiyatli o‘tdingiz!", reply_markup=menu)
+    await message.answer("✅ Ro‘yxatdan o‘tdingiz!", reply_markup=menu)
 
 
 # ================== MUROJAAT ==================
 @dp.message(F.text == "📩 Murojaat yuborish")
-async def ask_for_request(message: types.Message):
-    if message.from_user.id in registered_users:
+async def ask_request(message: types.Message):
+    if is_registered(message.from_user.id):
         await message.answer("✍️ Murojaatingizni yozing.")
     else:
         await message.answer("❗ Avval ro‘yxatdan o‘ting. /start")
 
 
 @dp.message()
-async def send_request(message: types.Message):
-    user_id = message.from_user.id
-    if user_id not in registered_users:
+async def handle_request(message: types.Message):
+    if not is_registered(message.from_user.id):
         return
 
-    user = registered_users[user_id]
+    user = get_user(message.from_user.id)
+    _, full_name, faculty, group, phone = user
 
     text = (
         f"📩 Yangi murojaat\n\n"
-        f"👤 Talaba: {message.from_user.full_name}\n"
-        f"🏫 Fakultet: {user['faculty']}\n"
-        f"🎓 Guruh: {user['group']}\n"
-        f"📞 Tel: {user['phone']}\n\n"
+        f"👤 Talaba: {full_name}\n"
+        f"🏫 Fakultet: {faculty}\n"
+        f"🎓 Guruh: {group}\n"
+        f"📞 Tel: {phone}\n\n"
         f"✉️ Murojaat:\n{message.text}"
     )
 
-    for admin_id in ADMIN_IDS:
-        await bot.send_message(admin_id, text)
+    for admin in ADMIN_IDS:
+        await bot.send_message(admin, text)
 
     await message.answer("✅ Murojaatingiz yuborildi!")
 
